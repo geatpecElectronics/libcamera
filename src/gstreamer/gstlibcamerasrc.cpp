@@ -29,6 +29,8 @@
 
 #include <libcamera/camera.h>
 #include <libcamera/camera_manager.h>
+#include <libcamera/transform.h>
+#include <libcamera/orientation.h>
 #include <libcamera/control_ids.h>
 
 #include <gst/base/base.h>
@@ -141,7 +143,8 @@ struct _GstLibcameraSrc {
 	GstTask *task;
 
 	gchar *camera_name;
-
+	gboolean hflip;
+	gboolean vflip;
 	std::atomic<GstEvent *> pending_eos;
 
 	GstLibcameraSrcState *state;
@@ -152,6 +155,8 @@ struct _GstLibcameraSrc {
 enum {
 	PROP_0,
 	PROP_CAMERA_NAME,
+	PROP_HFLIP,
+	PROP_VFLIP,
 	PROP_LAST
 };
 
@@ -605,7 +610,15 @@ gst_libcamera_src_negotiate(GstLibcameraSrc *self)
 		gst_libcamera_configure_stream_from_caps(stream_cfg, caps, &transfer[i]);
 		gst_libcamera_get_framerate_from_caps(caps, element_caps);
 	}
-
+	/* Apply transform (hflip/vflip) before validation. */
+	{
+		Transform transform = Transform::Identity;
+		if (self->hflip)
+			transform = Transform::HFlip * transform;
+		if (self->vflip)
+			transform = Transform::VFlip * transform;
+		state->config_->orientation = libcamera::Orientation::Rotate0 * transform;
+	}
 	/* Validate the configuration. */
 	CameraConfiguration::Status status = state->config_->validate();
 	if (status == CameraConfiguration::Invalid)
@@ -934,6 +947,12 @@ gst_libcamera_src_set_property(GObject *object, guint prop_id,
 		g_free(self->camera_name);
 		self->camera_name = g_value_dup_string(value);
 		break;
+	case PROP_HFLIP:
+		self->hflip = g_value_get_boolean(value);
+		break;
+	case PROP_VFLIP:
+		self->vflip = g_value_get_boolean(value);
+		break;
 	default:
 		if (!state->controls_.setProperty(prop_id - PROP_LAST, value, pspec))
 			G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -952,6 +971,12 @@ gst_libcamera_src_get_property(GObject *object, guint prop_id, GValue *value,
 	switch (prop_id) {
 	case PROP_CAMERA_NAME:
 		g_value_set_string(value, self->camera_name);
+		break;
+	case PROP_HFLIP:
+		g_value_set_boolean(value, self->hflip);
+		break;
+	case PROP_VFLIP:
+		g_value_set_boolean(value, self->vflip);
 		break;
 	default:
 		if (!state->controls_.getProperty(prop_id - PROP_LAST, value, pspec))
@@ -1161,7 +1186,17 @@ gst_libcamera_src_class_init(GstLibcameraSrcClass *klass)
 							     | G_PARAM_READWRITE
 							     | G_PARAM_STATIC_STRINGS));
 	g_object_class_install_property(object_class, PROP_CAMERA_NAME, spec);
+	g_object_class_install_property(object_class, PROP_HFLIP,
+		g_param_spec_boolean("hflip", "Horizontal Flip",
+							"Flip image horizontally at ISP level",
+							FALSE,
+							(GParamFlags)(GST_PARAM_MUTABLE_READY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
+	g_object_class_install_property(object_class, PROP_VFLIP,
+		g_param_spec_boolean("vflip", "Vertical Flip",
+							"Flip image vertically at ISP level",
+							FALSE,
+							(GParamFlags)(GST_PARAM_MUTABLE_READY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 	GstCameraControls::installProperties(object_class, PROP_LAST);
 }
 
